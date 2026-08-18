@@ -60,9 +60,10 @@ export const HALFTONE_STYLES: StylePreset[] = [
       glow: false,
       grain: false,
       texture: false,
-      density: 0.85,
-      cellSize: 11,
-      contrast: 0.25,
+      density: 0.5,
+      threshold: 0.16,
+      cellSize: 12,
+      contrast: 0.3,
     },
   },
   {
