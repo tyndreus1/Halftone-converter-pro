@@ -1,32 +1,50 @@
-export type HalftoneMode = "mono" | "cmyk";
-export type DotShape = "circle" | "square" | "diamond";
+export type PatternType = "dots" | "lines" | "crosshatch";
 
 export interface HalftoneOptions {
-  /** Grid cell size in pixels. Larger = bigger, coarser dots. */
+  /** Grid cell size in pixels ("Dot Size"). */
   cellSize: number;
-  /** Screen angle in degrees (used directly in mono mode). */
+  /** 0..1 — scales dot/line coverage ("Density"). */
+  density: number;
+  /** 0..1 — tones with less ink than this are left blank ("Threshold"). */
+  threshold: number;
+  /** Screen angle in degrees. */
   angle: number;
-  mode: HalftoneMode;
-  shape: DotShape;
   /** Contrast adjustment, -1..1. 0 = unchanged. */
   contrast: number;
-  /** Invert tones (useful for dark backgrounds). */
+  /** Invert tones. */
   invert: boolean;
-  /** Foreground (ink) color for mono mode, e.g. "#0f172a". */
+  pattern: PatternType;
+  /** Grayscale/duotone using a single ink color instead of the palette. */
+  mono: boolean;
+  /** Ordered palette (shadow -> highlight) for color mode. */
+  palette: string[];
+  /** Ink color for mono mode. */
   foreground: string;
-  /** Background color for mono mode, e.g. "#f8fafc". */
+  /** Canvas background color. */
   background: string;
+  /** Neon glow (additive blending + blur). */
+  glow: boolean;
+  /** Film grain overlay. */
+  grain: boolean;
+  /** CRT scanline texture overlay. */
+  texture: boolean;
 }
 
 export const DEFAULT_OPTIONS: HalftoneOptions = {
-  cellSize: 8,
+  cellSize: 9,
+  density: 0.72,
+  threshold: 0.12,
   angle: 45,
-  mode: "mono",
-  shape: "circle",
-  contrast: 0,
+  contrast: 0.12,
   invert: false,
-  foreground: "#0f172a",
-  background: "#f8fafc",
+  pattern: "dots",
+  mono: false,
+  palette: ["#0b0221", "#5f2ee5", "#ff2a6d", "#05d9e8"],
+  foreground: "#e8edf7",
+  background: "#0a0416",
+  glow: true,
+  grain: false,
+  texture: false,
 };
 
 /** Perceptual luminance from sRGB channels, returned in 0..1. */
@@ -66,8 +84,7 @@ export function applyContrast(value: number, contrast: number): number {
 
 /**
  * Radius of a halftone dot so that its area is proportional to ink
- * coverage. A cell fully covered (coverage=1) yields a dot that fills
- * the cell (radius up to the cell half-diagonal).
+ * coverage. Full coverage fills the cell (radius up to the half-diagonal).
  */
 export function coverageToRadius(coverage: number, cellSize: number): number {
   const clamped = Math.max(0, Math.min(1, coverage));
@@ -75,50 +92,75 @@ export function coverageToRadius(coverage: number, cellSize: number): number {
   return maxRadius * Math.sqrt(clamped);
 }
 
-interface Channel {
-  /** Ink coverage 0..1 for a pixel; higher = more ink (darker dot). */
-  coverage: (r: number, g: number, b: number, a: number) => number;
-  color: string;
-  angle: number;
+export interface Rgb {
+  r: number;
+  g: number;
+  b: number;
 }
 
-function drawDot(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  radius: number,
-  shape: DotShape,
-): void {
-  if (radius <= 0.05) return;
-  ctx.beginPath();
-  if (shape === "circle") {
-    ctx.arc(x, y, radius, 0, Math.PI * 2);
-  } else if (shape === "square") {
-    const s = radius * Math.SQRT2;
-    ctx.rect(x - s / 2, y - s / 2, s, s);
-  } else {
-    // diamond
-    ctx.moveTo(x, y - radius);
-    ctx.lineTo(x + radius, y);
-    ctx.lineTo(x, y + radius);
-    ctx.lineTo(x - radius, y);
-    ctx.closePath();
+/** Parse a #rgb or #rrggbb color into an {r,g,b} triple. */
+export function hexToRgb(hex: string): Rgb {
+  let h = hex.replace("#", "").trim();
+  if (h.length === 3) {
+    h = h
+      .split("")
+      .map((c) => c + c)
+      .join("");
   }
-  ctx.fill();
+  const int = parseInt(h, 16);
+  if (Number.isNaN(int) || h.length !== 6) {
+    return { r: 0, g: 0, b: 0 };
+  }
+  return {
+    r: (int >> 16) & 255,
+    g: (int >> 8) & 255,
+    b: int & 255,
+  };
 }
 
-function averageCoverage(
+/**
+ * Sample an ordered list of colors as a continuous gradient.
+ * `t` is clamped to 0..1; t=0 -> first color, t=1 -> last color.
+ */
+export function samplePalette(colors: string[], t: number): Rgb {
+  if (colors.length === 0) return { r: 255, g: 255, b: 255 };
+  if (colors.length === 1) return hexToRgb(colors[0]);
+  const clamped = Math.max(0, Math.min(1, t));
+  const scaled = clamped * (colors.length - 1);
+  const i = Math.min(colors.length - 2, Math.floor(scaled));
+  const f = scaled - i;
+  const a = hexToRgb(colors[i]);
+  const b = hexToRgb(colors[i + 1]);
+  return {
+    r: Math.round(a.r + (b.r - a.r) * f),
+    g: Math.round(a.g + (b.g - a.g) * f),
+    b: Math.round(a.b + (b.b - a.b) * f),
+  };
+}
+
+function rgbCss({ r, g, b }: Rgb): string {
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
+interface CellSample {
+  luminance: number;
+  color: Rgb;
+}
+
+function sampleCell(
   data: Uint8ClampedArray,
   width: number,
   height: number,
   cx: number,
   cy: number,
   cellSize: number,
-  channel: Channel,
-): number | null {
+): CellSample | null {
   const half = cellSize / 2;
   const step = Math.max(1, Math.floor(cellSize / 4));
-  let sum = 0;
+  let lum = 0;
+  let r = 0;
+  let g = 0;
+  let b = 0;
   let count = 0;
   for (let sy = cy - half; sy <= cy + half; sy += step) {
     for (let sx = cx - half; sx <= cx + half; sx += step) {
@@ -126,72 +168,96 @@ function averageCoverage(
       const py = Math.round(sy);
       if (px < 0 || py < 0 || px >= width || py >= height) continue;
       const idx = (py * width + px) * 4;
-      sum += channel.coverage(
-        data[idx],
-        data[idx + 1],
-        data[idx + 2],
-        data[idx + 3],
-      );
+      r += data[idx];
+      g += data[idx + 1];
+      b += data[idx + 2];
+      lum += rgbToLuminance(data[idx], data[idx + 1], data[idx + 2]);
       count += 1;
     }
   }
   if (count === 0) return null;
-  return sum / count;
+  return {
+    luminance: lum / count,
+    color: { r: r / count, g: g / count, b: b / count },
+  };
 }
 
-function renderScreen(
+function drawShape(
   ctx: CanvasRenderingContext2D,
-  source: ImageData,
-  channel: Channel,
-  options: HalftoneOptions,
+  u: number,
+  v: number,
+  coverage: number,
+  cellSize: number,
+  pattern: PatternType,
 ): void {
-  const { width, height, data } = source;
-  const { cellSize, shape, contrast, invert } = options;
-  const angle = (channel.angle * Math.PI) / 180;
-  const cos = Math.cos(angle);
-  const sin = Math.sin(angle);
-
-  ctx.fillStyle = channel.color;
-
-  // Iterate the grid in a rotated coordinate system so dots align to the
-  // screen angle, then map each grid node back into image space.
-  const diag = Math.ceil(Math.sqrt(width * width + height * height));
-  const start = -diag;
-  const end = diag;
-
-  for (let v = start; v <= end; v += cellSize) {
-    for (let u = start; u <= end; u += cellSize) {
-      // Rotate grid coordinates into image space (centered on image middle).
-      const cx = width / 2 + (u * cos - v * sin);
-      const cy = height / 2 + (u * sin + v * cos);
-      if (
-        cx < -cellSize ||
-        cy < -cellSize ||
-        cx > width + cellSize ||
-        cy > height + cellSize
-      ) {
-        continue;
-      }
-      const avg = averageCoverage(data, width, height, cx, cy, cellSize, channel);
-      if (avg === null) continue;
-      let coverage = invert ? 1 - avg : avg;
-      coverage = applyContrast(coverage, contrast);
-      const radius = coverageToRadius(coverage, cellSize);
-      drawDot(ctx, cx, cy, radius, shape);
-    }
+  if (pattern === "dots") {
+    const radius = coverageToRadius(coverage, cellSize);
+    if (radius <= 0.05) return;
+    ctx.beginPath();
+    ctx.arc(u, v, radius, 0, Math.PI * 2);
+    ctx.fill();
+    return;
   }
+
+  const thickness = Math.max(0, coverage) * cellSize;
+  if (thickness <= 0.15) return;
+  const span = cellSize + 0.75;
+  if (pattern === "lines") {
+    ctx.fillRect(u - span / 2, v - thickness / 2, span, thickness);
+    return;
+  }
+  // crosshatch: horizontal + vertical bars
+  ctx.fillRect(u - span / 2, v - thickness / 2, span, thickness);
+  ctx.fillRect(u - thickness / 2, v - span / 2, thickness, span);
 }
 
-const CMYK_CHANNELS: Array<{
-  key: "c" | "m" | "y" | "k";
-  color: string;
-  angle: number;
-}> = [
-  { key: "y", color: "#ffff00", angle: 0 },
-  { key: "c", color: "#00ffff", angle: 15 },
-  { key: "k", color: "#000000", angle: 45 },
-  { key: "m", color: "#ff00ff", angle: 75 },
-];
+function makeNoiseCanvas(size = 128): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+  const img = ctx.createImageData(size, size);
+  for (let i = 0; i < img.data.length; i += 4) {
+    const n = Math.floor(Math.random() * 256);
+    img.data[i] = n;
+    img.data[i + 1] = n;
+    img.data[i + 2] = n;
+    img.data[i + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+function applyGrain(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+): void {
+  const noise = makeNoiseCanvas();
+  const pattern = ctx.createPattern(noise, "repeat");
+  if (!pattern) return;
+  ctx.save();
+  ctx.globalAlpha = 0.12;
+  ctx.globalCompositeOperation = "overlay";
+  ctx.fillStyle = pattern;
+  ctx.fillRect(0, 0, width, height);
+  ctx.restore();
+}
+
+function applyTexture(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number,
+): void {
+  ctx.save();
+  ctx.globalCompositeOperation = "multiply";
+  ctx.fillStyle = "rgba(0, 0, 0, 0.22)";
+  for (let y = 0; y < height; y += 3) {
+    ctx.fillRect(0, y, width, 1.4);
+  }
+  ctx.restore();
+}
 
 /**
  * Render a halftone version of `source` onto `ctx`'s canvas. The canvas is
@@ -202,39 +268,84 @@ export function renderHalftone(
   source: ImageData,
   options: HalftoneOptions,
 ): void {
-  const { width, height } = source;
+  const { width, height, data } = source;
+  const {
+    cellSize,
+    density,
+    threshold,
+    angle,
+    contrast,
+    invert,
+    pattern,
+    mono,
+    palette,
+    foreground,
+    background,
+    glow,
+    grain,
+    texture,
+  } = options;
+
   ctx.save();
   ctx.clearRect(0, 0, width, height);
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
 
-  if (options.mode === "cmyk") {
-    ctx.fillStyle = "#ffffff";
-    ctx.fillRect(0, 0, width, height);
-    ctx.globalCompositeOperation = "multiply";
-    for (const ch of CMYK_CHANNELS) {
-      renderScreen(
-        ctx,
-        source,
-        {
-          color: ch.color,
-          angle: ch.angle,
-          coverage: (r, g, b) => rgbToCmyk(r, g, b)[ch.key],
-        },
-        options,
-      );
-    }
-  } else {
-    ctx.fillStyle = options.background;
-    ctx.fillRect(0, 0, width, height);
-    renderScreen(
-      ctx,
-      source,
-      {
-        color: options.foreground,
-        angle: options.angle,
-        coverage: (r, g, b) => 1 - rgbToLuminance(r, g, b),
-      },
-      options,
-    );
+  const centerX = width / 2;
+  const centerY = height / 2;
+  const rad = (angle * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const diag = Math.ceil(Math.sqrt(width * width + height * height));
+
+  ctx.save();
+  ctx.translate(centerX, centerY);
+  ctx.rotate(rad);
+  if (glow) {
+    ctx.globalCompositeOperation = "lighter";
   }
+
+  for (let v = -diag; v <= diag; v += cellSize) {
+    for (let u = -diag; u <= diag; u += cellSize) {
+      // Map rotated grid node (u, v) back into image space to sample tone.
+      const cx = centerX + (u * cos - v * sin);
+      const cy = centerY + (u * sin + v * cos);
+      if (
+        cx < -cellSize ||
+        cy < -cellSize ||
+        cx > width + cellSize ||
+        cy > height + cellSize
+      ) {
+        continue;
+      }
+      const sample = sampleCell(data, width, height, cx, cy, cellSize);
+      if (!sample) continue;
+
+      let ink = invert ? sample.luminance : 1 - sample.luminance;
+      ink = applyContrast(ink, contrast);
+      if (ink < threshold) continue;
+      const coverage = Math.min(1, ink * (0.35 + density * 1.15));
+
+      let color: Rgb;
+      if (mono) {
+        color = hexToRgb(foreground);
+      } else {
+        const t = invert ? 1 - sample.luminance : sample.luminance;
+        color = samplePalette(palette, t);
+      }
+      ctx.fillStyle = rgbCss(color);
+      if (glow) {
+        ctx.shadowColor = rgbCss(color);
+        ctx.shadowBlur = cellSize * 0.85;
+      } else {
+        ctx.shadowBlur = 0;
+      }
+      drawShape(ctx, u, v, coverage, cellSize, pattern);
+    }
+  }
+  ctx.restore();
+
+  if (grain) applyGrain(ctx, width, height);
+  if (texture) applyTexture(ctx, width, height);
   ctx.restore();
 }

@@ -8,14 +8,19 @@ a `<canvas>`.
 
 ## Features
 
-- **Monochrome and CMYK color** halftone screens (CMYK uses the classic
-  15° / 75° / 0° / 45° screen angles with subtractive `multiply` blending).
-- **Dot shapes:** circle, square, diamond.
-- Adjustable **dot size**, **screen angle**, and **contrast**.
-- Custom **ink** and **paper** colors for monochrome output.
-- **Invert tones** toggle.
-- Drag & drop or file upload, plus a built-in **sample image**.
-- One-click **PNG download** of the result.
+- **Neon studio UI** with a top nav, tool rail, style/palette sidebar,
+  live preview stage, presets + history, and a bottom control bar.
+- **Halftone styles:** DuoTone, Pop Art, Grayscale, Retro-Wave.
+- **Color palettes** (Neon Nights, 80s Sunset, Pastel Punch) plus a
+  **Custom palette** — add/remove your own colors with a color picker.
+- **Presets:** Glitch Pop, Waveform, CRT Glow (one-click looks).
+- **Pattern types:** Dots, Lines, Crosshatch.
+- Adjustable **Dot Size**, **Density**, and **Threshold** (plus screen
+  angle and contrast in the engine).
+- **Layers & Effects:** Grain, Glow (neon bloom), Texture (CRT scanlines).
+- **History**: snapshot any generated look and restore it in one click.
+- Drag & drop or file upload, a built-in synthwave **sample image**, and
+  one-click **PNG export**.
 
 ## Tech stack
 
@@ -44,10 +49,11 @@ npm run dev      # start the dev server at http://localhost:5173
 
 ```
 src/
-  App.tsx            # UI: controls, upload/drag-drop, download
+  App.tsx            # neon UI: nav, sidebar, stage, presets, controls
   lib/
-    halftone.ts      # pure math + canvas halftone renderer
+    halftone.ts      # pure math + canvas halftone renderer (patterns, palettes, effects)
     halftone.test.ts # unit tests for the math
-    sample.ts        # built-in sample image generator
-  index.css          # styling
+    presets.ts       # styles, color palettes, and presets
+    sample.ts        # built-in synthwave sample image generator
+  index.css          # neon styling
 ```
