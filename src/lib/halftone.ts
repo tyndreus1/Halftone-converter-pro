@@ -191,7 +191,9 @@ function drawShape(
   pattern: PatternType,
 ): void {
   if (pattern === "dots") {
-    const radius = coverageToRadius(coverage, cellSize);
+    // Cap the radius near half the cell so dots stay round and never merge
+    // into flat fills in dark regions (keeps a classic halftone dot grid).
+    const radius = Math.min(coverageToRadius(coverage, cellSize), cellSize * 0.52);
     if (radius <= 0.05) return;
     ctx.beginPath();
     ctx.arc(u, v, radius, 0, Math.PI * 2);
