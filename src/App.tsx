@@ -320,6 +320,12 @@ export default function App() {
               active={options.texture}
               onChange={(v) => update("texture", v)}
             />
+            <EffectToggle
+              label="Invert"
+              icon="invert"
+              active={options.invert}
+              onChange={(v) => update("invert", v)}
+            />
           </Section>
         </aside>
 
@@ -567,7 +573,7 @@ function Section(props: {
 
 function EffectToggle(props: {
   label: string;
-  icon: "grain" | "glow" | "texture";
+  icon: "grain" | "glow" | "texture" | "invert";
   active: boolean;
   onChange: (v: boolean) => void;
 }) {
@@ -699,7 +705,15 @@ function PatternIcon({ type }: { type: PatternType }) {
     </svg>
   );
 }
-function EffectIcon({ icon }: { icon: "grain" | "glow" | "texture" }) {
+function EffectIcon({ icon }: { icon: "grain" | "glow" | "texture" | "invert" }) {
+  if (icon === "invert") {
+    return (
+      <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="1.6">
+        <circle cx="12" cy="12" r="8" fill="none" />
+        <path d="M12 4a8 8 0 0 0 0 16Z" fill="currentColor" stroke="none" />
+      </svg>
+    );
+  }
   if (icon === "grain") {
     return (
       <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">

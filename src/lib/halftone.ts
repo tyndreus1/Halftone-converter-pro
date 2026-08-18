@@ -323,18 +323,16 @@ export function renderHalftone(
       const sample = sampleCell(data, width, height, cx, cy, cellSize);
       if (!sample) continue;
 
-      let ink = invert ? sample.luminance : 1 - sample.luminance;
-      ink = applyContrast(ink, contrast);
+      // Bright pixels carry more ink so a light/neon ink reads as a positive
+      // image on the dark canvas (dark areas stay empty). `invert` flips it.
+      const tone = invert ? 1 - sample.luminance : sample.luminance;
+      const ink = applyContrast(tone, contrast);
       if (ink < threshold) continue;
       const coverage = Math.min(1, ink * (0.35 + density * 1.15));
 
-      let color: Rgb;
-      if (mono) {
-        color = hexToRgb(foreground);
-      } else {
-        const t = invert ? 1 - sample.luminance : sample.luminance;
-        color = samplePalette(palette, t);
-      }
+      const color = mono
+        ? hexToRgb(foreground)
+        : samplePalette(palette, ink);
       ctx.fillStyle = rgbCss(color);
       if (glow) {
         ctx.shadowColor = rgbCss(color);
